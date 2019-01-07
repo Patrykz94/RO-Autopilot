@@ -47,7 +47,7 @@ print(meco_speed)
                                                        target_true_anomaly)
 
 game_launch_time = space_center.ut + launch_time
-space_center.warp_to(game_launch_time - 10)
+space_center.warp_to(game_launch_time - 20)
 
 while (space_center.ut - game_launch_time) < 0:
     print('Time to launch %f' % (space_center.ut - game_launch_time))

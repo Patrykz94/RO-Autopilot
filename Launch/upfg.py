@@ -4,6 +4,7 @@ from collections import OrderedDict
 import numpy as np
 
 from Launch import globals
+import utilities as utils
 
 conn = globals.conn
 space_center = globals.space_center
@@ -12,75 +13,6 @@ mu = globals.mu
 g0 = globals.g0
 # For ease of use
 orbref = vessel.orbit.body.non_rotating_reference_frame
-
-
-# Trigonometric function in degrees :)
-
-
-def r2d(x):
-    return x * 180 / np.pi
-
-
-def d2r(x):
-    return x * np.pi / 180
-
-
-def cosd(x):
-    return np.cos(d2r(x))
-
-
-def acosd(x):
-    np.clip(x, -1, 1)
-    return r2d(np.arccos(x))
-
-
-def sind(x):
-    return np.sin(d2r(x))
-
-
-def asind(x):
-    np.clip(x, -1, 1)
-    return r2d(np.arcsin(x))
-
-
-def tand(x):
-    return np.tan(d2r(x))
-
-
-def atand(x):
-    return r2d(np.arctan(x))
-
-
-def atan2d(x, y):
-    return r2d(np.arctan2(x, y))
-
-
-# Another simplified function, and yeah i am that lazy
-# This one is for vector operation
-def norm(x):
-    return np.linalg.norm(x)
-
-
-def unit(x):
-    x = np.asarray(x)
-    if norm(x) == 0:
-        return x
-    else:
-        return x / norm(x)
-
-
-def cross(x, y):
-    return np.cross(x, y)
-
-
-def dot(x, y):
-    return np.vdot(x, y)
-
-
-def vang(x, y):
-    x = unit(x)
-    y = unit(y)
-    return acosd(np.clip(dot(x, y), -1, 1))
 
 
 class Struct:
@@ -93,6 +25,18 @@ def launch_targeting(periapsis,
                      lan,
                      true_anomaly=0,
                      slip=-1.5):
+    # Validate all values provided
+    if apoapsis == "default":
+        apoapsis = 250
+    if periapsis == "default":
+        periapsis = 250
+    if periapsis > apoapsis:
+        temp = apoapsis
+        apoapsis = periapsis
+        periapsis = temp
+    if inclination == "default":
+        inclination = vessel.flight().latitude
+
     # surfref = vessel.orbit.body.reference_frame
     local_x = [1, 0, 0]
     # local_y = [0, 1, 0]
@@ -106,10 +50,10 @@ def launch_targeting(periapsis,
     ecc = (apoapsis - periapsis) / (apoapsis + periapsis)
     velocity_periapsis = np.sqrt(
         (mu * apoapsis) / (periapsis * semimajor_axis))
-    radius = (semimajor_axis * (1 - ecc ** 2)) / (1 + ecc * cosd(true_anomaly))
+    radius = (semimajor_axis * (1 - ecc ** 2)) / (1 + ecc * utils.cosd(true_anomaly))
     velocity = np.sqrt((velocity_periapsis ** 2) + 2 * mu *
                        ((1 / radius) - (1 / periapsis)))
-    angle = acosd((periapsis * velocity_periapsis) / (radius * velocity))
+    angle = utils.acosd((periapsis * velocity_periapsis) / (radius * velocity))
     descending = False
     if inclination < 0:
         descending = True
@@ -117,8 +61,8 @@ def launch_targeting(periapsis,
     if inclination < vessel.flight().latitude:
         azimuth = 90
     else:
-        beta_inertial = asind(cosd(inclination) /
-                              cosd(vessel.flight().latitude))
+        beta_inertial = utils.asind(utils.cosd(inclination) /
+                              utils.cosd(vessel.flight().latitude))
         if descending:
             if beta_inertial <= 90:
                 beta_inertial = 180 - beta_inertial
@@ -126,25 +70,35 @@ def launch_targeting(periapsis,
                 beta_inertial = 540 - beta_inertial
         earth_velocity = (vessel.orbit.body.rotational_speed *
                           vessel.orbit.body.equatorial_radius)
-        velocity_x = (velocity * sind(beta_inertial) - earth_velocity *
-                      cosd(vessel.flight().latitude))
+        velocity_x = (velocity * utils.sind(beta_inertial) - earth_velocity *
+                      utils.cosd(vessel.flight().latitude))
         velocity_y = (velocity *
-                      cosd(beta_inertial))
-        azimuth = atan2d(velocity_x, velocity_y)
+                      utils.cosd(beta_inertial))
+        azimuth = utils.atan2d(velocity_x, velocity_y)
 
-    relative_longitude = asind(tand(vessel.flight().latitude) /
-                               tand(inclination))
+    relative_longitude = utils.asind(utils.tand(vessel.flight().latitude) /
+                               utils.tand(inclination))
     if descending:
         relative_longitude = 180 - relative_longitude
     if conn.krpc.get_status().version == '0.3.6':
         prime_meridian = vessel.orbit.body.msl_position(0, 0, orbref)
-        rotational_angle = atan2d(dot(local_z, prime_meridian),
-                                  dot(local_x, prime_meridian))
+        rotational_angle = utils.atan2d(utils.dot(local_z, prime_meridian),
+                                  utils.dot(local_x, prime_meridian))
         if rotational_angle < 0:
             rotational_angle += 360
     else:
-        rotational_angle = r2d(vessel.orbit.body.rotation_angle)
+        rotational_angle = utils.r2d(vessel.orbit.body.rotation_angle)
     print(rotational_angle)
+    
+    # Validate LAN
+    if lan == "default":
+        launchTimeAdvance = 120
+        currentNode = nodeVector(inclination, descending)
+        currentLan = utils.vang(currentNode, solarPrimeVector())
+        if utils.dot(np.asarray([0,1,0]), utils.cross(currentNode, solarPrimeVector())) < 0:
+            currentLan = 360 - currentLan
+        lan = currentLan + (launchTimeAdvance + 30)/vessel.orbit.body.rotational_period*360
+
     geo_longitude = lan + relative_longitude - rotational_angle
     geo_longitude = np.mod(geo_longitude + 360, 360)
     node_angle = geo_longitude - vessel.flight().longitude
@@ -152,13 +106,13 @@ def launch_targeting(periapsis,
     launch_time = (node_angle / 360) * vessel.orbit.body.rotational_period
 
     rx = np.array([[1, 0, 0],
-                   [0, cosd(inclination), -sind(inclination)],
-                   [0, sind(inclination), cosd(inclination)]])
-    ry = np.array([[cosd(0), 0, sind(0)],
+                   [0, utils.cosd(inclination), -utils.sind(inclination)],
+                   [0, utils.sind(inclination), utils.cosd(inclination)]])
+    ry = np.array([[utils.cosd(0), 0, utils.sind(0)],
                    [0, 1, 0],
-                   [-sind(0), 0, cosd(0)]])
-    rz = np.array([[cosd(lan), -sind(lan), 0],
-                   [sind(lan), cosd(lan), 0],
+                   [-utils.sind(0), 0, utils.cosd(0)]])
+    rz = np.array([[utils.cosd(lan), -utils.sind(lan), 0],
+                   [utils.sind(lan), utils.cosd(lan), 0],
                    [0, 0, 1]])
 
     m0 = np.matmul(rz, ry)
@@ -182,9 +136,9 @@ def angle_from_vec(x, ref, angle):
     surface_frame = vessel.surface_reference_frame
     vector = space_center.transform_direction(x, ref, surface_frame)
     if angle == 'pitch':
-        return 90 - vang(up, vector)
+        return 90 - utils.vang(up, vector)
     elif angle == 'yaw':
-        out = atan2d(dot(east, vector), dot(north, vector))
+        out = utils.atan2d(utils.dot(east, vector), utils.dot(north, vector))
         if out < 0:
             out += 360
         return out
@@ -242,11 +196,11 @@ def upfg(vehicle, target, previous):
     for i in range(n - 1):
         li_.append(ve[i] * np.log(tu[i] / (tu[i] - tb[i])))
         l_ += li_[i]
-        if l_ > norm(vgo):
+        if l_ > utils.norm(vgo):
             vehicle.remove(vehicle[-1])
             print('We have more than what we need')
             return upfg(vehicle, target, previous)
-    li_.append(norm(vgo) - l_)
+    li_.append(utils.norm(vgo) - l_)
 
     tgoi = list()
 
@@ -260,9 +214,9 @@ def upfg(vehicle, target, previous):
     # l1 = li[0]
     tgo = tgoi[n - 1]
     if tgo > 5:
-        theta_max = d2r(60)
+        theta_max = utils.d2r(60)
     else:
-        theta_max = d2r(1)
+        theta_max = utils.d2r(1)
 
     l_ = 0
     s_ = 0
@@ -296,32 +250,32 @@ def upfg(vehicle, target, previous):
         p_ += pi_[i]
         h_ = j_ * tgoi[i] - q_
 
-    lamb = unit(vgo)
+    lamb = utils.unit(vgo)
     # rgrav1 = rgrav
     if previous.tgo != 0:
         rgrav = (tgo / previous.tgo) ** 2 * rgrav
     rgo = rd - (r + v * tgo + rgrav)
     # rgo1 = rgo
-    iz = unit(cross(rd, iy))
+    iz = utils.unit(utils.cross(rd, iy))
     # iz1 = iz
-    rgoxy = rgo - dot(iz, rgo) * iz
-    rgoz = (s_ - dot(lamb, rgoxy)) / dot(lamb, iz)
+    rgoxy = rgo - utils.dot(iz, rgo) * iz
+    rgoz = (s_ - utils.dot(lamb, rgoxy)) / utils.dot(lamb, iz)
     rgo = rgoxy + rgoz * iz + rbias
     lambdade = q_ - s_ * j_ / l_
     lambdadot = (rgo - s_ * lamb) / lambdade
-    if (norm(lambdadot) * j_ / l_) > theta_max:
+    if (utils.norm(lambdadot) * j_ / l_) > theta_max:
         lambdadotmag = theta_max / (j_ / l_)
-        lambdadot = unit(lambdadot) * lambdadotmag
+        lambdadot = utils.unit(lambdadot) * lambdadotmag
         rgo = s_ * lamb + lambdade * lambdadot
-    i_f = unit(lamb - lambdadot * j_ / l_)
-    phi = np.arccos(dot(i_f, lamb))
+    i_f = utils.unit(lamb - lambdadot * j_ / l_)
+    phi = np.arccos(utils.dot(i_f, lamb))
     phidot = -phi * l_ / j_
     vthrust = (l_ - 0.5 * l_ * phi ** 2 - j_ * phi *
                phidot - 0.5 * h_ * phidot ** 2) * lamb
-    vthrust = vthrust - (l_ * phi + j_ * phidot) * unit(lambdadot)
+    vthrust = vthrust - (l_ * phi + j_ * phidot) * utils.unit(lambdadot)
     rthrust = (s_ - 0.5 * s_ * phi ** 2 - q_ * phi *
                phidot - 0.5 * p_ * phidot ** 2) * lamb
-    rthrust = rthrust - (s_ * phi + q_ * phidot) * unit(lambdadot)
+    rthrust = rthrust - (s_ * phi + q_ * phidot) * utils.unit(lambdadot)
     vbias = vgo - vthrust
     rbias = rgo - rthrust
 
@@ -336,12 +290,12 @@ def upfg(vehicle, target, previous):
     rgrav = rc2 - rc1 - vc1 * tgo
 
     rp = r + v * tgo + rgrav + rthrust
-    rp = rp - dot(rp, iy) * iy
-    rd = rdval * unit(rp)
-    ix = unit(rd)
-    iz = cross(ix, iy)
+    rp = rp - utils.dot(rp, iy) * iy
+    rd = rdval * utils.unit(rp)
+    ix = utils.unit(rd)
+    iz = utils.cross(ix, iy)
     m1 = np.transpose([ix, iy, iz])
-    m2 = np.transpose([sind(gamma), 0, cosd(gamma)])
+    m2 = np.transpose([utils.sind(gamma), 0, utils.cosd(gamma)])
     mx = np.matmul(m1, m2).transpose()
     vd = vdval * mx
     vgo = vd - v - vgrav + vbias
@@ -387,7 +341,7 @@ def cse_routine(r0, v0, dt, last):
         f0 = -1
 
     n = 0
-    r0m = norm(r0)
+    r0m = utils.norm(r0)
 
     f1 = f0 * np.sqrt(r0m / mu)
     f2 = 1 / f1
@@ -398,8 +352,8 @@ def cse_routine(r0, v0, dt, last):
 
     ir0 = r0 / r0m
     v0s = f1 * v0
-    sigma0s = dot(ir0, v0s)
-    b0 = dot(v0s, v0s) - 1
+    sigma0s = utils.dot(ir0, v0s)
+    b0 = utils.dot(v0s, v0s) - 1
     alphas = 1 - b0
 
     xguess = f5 * x
@@ -583,16 +537,6 @@ def si(dterror, xguess, dtguess, xmin, dtmin, xmax, dtmax):
             dtmin = dtguess
 
     return [dxs, xmin, dtmin, xmax, dtmax]
-
-
-def rodrigues(vector, axis, angle):
-    vector = np.asarray(vector)
-    axis = unit(axis)
-    rotated = vector * cosd(angle)
-    rotated += cross(axis, vector) * sind(angle)
-    rotated += axis * dot(axis, vector) * (1 - cosd(angle))
-
-    return rotated
 
 
 def throttle_control(vehicle, g_limit, q_limit):
