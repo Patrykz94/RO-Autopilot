@@ -23,7 +23,7 @@ def launch_targeting(periapsis,
                      apoapsis,
                      inclination,
                      lan,
-                     true_anomaly=0,
+                     true_anomaly,
                      slip=-1.5):
     # Validate all values provided
     if apoapsis == "default":
@@ -36,6 +36,13 @@ def launch_targeting(periapsis,
         periapsis = temp
     if inclination == "default":
         inclination = vessel.flight().latitude
+    if true_anomaly == "default":
+        true_anomaly = 0
+
+    apoapsis = float(apoapsis)
+    periapsis = float(periapsis)
+    inclination = float(inclination)
+    true_anomaly = float(true_anomaly)
 
     # surfref = vessel.orbit.body.reference_frame
     local_x = [1, 0, 0]
@@ -50,7 +57,8 @@ def launch_targeting(periapsis,
     ecc = (apoapsis - periapsis) / (apoapsis + periapsis)
     velocity_periapsis = np.sqrt(
         (mu * apoapsis) / (periapsis * semimajor_axis))
-    radius = (semimajor_axis * (1 - ecc ** 2)) / (1 + ecc * utils.cosd(true_anomaly))
+    radius = (semimajor_axis * (1 - ecc ** 2)) / \
+        (1 + ecc * utils.cosd(true_anomaly))
     velocity = np.sqrt((velocity_periapsis ** 2) + 2 * mu *
                        ((1 / radius) - (1 / periapsis)))
     angle = utils.acosd((periapsis * velocity_periapsis) / (radius * velocity))
@@ -62,7 +70,7 @@ def launch_targeting(periapsis,
         azimuth = 90
     else:
         beta_inertial = utils.asind(utils.cosd(inclination) /
-                              utils.cosd(vessel.flight().latitude))
+                                    utils.cosd(vessel.flight().latitude))
         if descending:
             if beta_inertial <= 90:
                 beta_inertial = 180 - beta_inertial
@@ -77,27 +85,30 @@ def launch_targeting(periapsis,
         azimuth = utils.atan2d(velocity_x, velocity_y)
 
     relative_longitude = utils.asind(utils.tand(vessel.flight().latitude) /
-                               utils.tand(inclination))
+                                     utils.tand(inclination))
     if descending:
         relative_longitude = 180 - relative_longitude
     if conn.krpc.get_status().version == '0.3.6':
         prime_meridian = vessel.orbit.body.msl_position(0, 0, orbref)
         rotational_angle = utils.atan2d(utils.dot(local_z, prime_meridian),
-                                  utils.dot(local_x, prime_meridian))
+                                        utils.dot(local_x, prime_meridian))
         if rotational_angle < 0:
             rotational_angle += 360
     else:
         rotational_angle = utils.r2d(vessel.orbit.body.rotation_angle)
-    print(rotational_angle)
-    
+
     # Validate LAN
     if lan == "default":
-        launchTimeAdvance = 120
-        currentNode = nodeVector(inclination, descending)
-        currentLan = utils.vang(currentNode, solarPrimeVector())
-        if utils.dot(np.asarray([0,1,0]), utils.cross(currentNode, solarPrimeVector())) < 0:
+        launchTimeAdvance = 360
+        currentNode = utils.nodeVector(inclination, descending)
+        currentLan = utils.vang(currentNode, utils.solar_prime_vector(
+            vessel.surface_reference_frame))
+        if utils.dot(np.asarray([0, 1, 0]), utils.cross(currentNode, utils.solar_prime_vector(vessel.surface_reference_frame))) < 0:
             currentLan = 360 - currentLan
-        lan = currentLan + (launchTimeAdvance + 30)/vessel.orbit.body.rotational_period*360
+        lan = currentLan + (launchTimeAdvance + 30) / \
+            vessel.orbit.body.rotational_period*360
+    else:
+        lan = float(lan)
 
     geo_longitude = lan + relative_longitude - rotational_angle
     geo_longitude = np.mod(geo_longitude + 360, 360)
@@ -236,7 +247,8 @@ def upfg(vehicle, target, previous):
         ji_.append(tu[i] * li_[i] - ve[i] * tb[i])
         si_.append(tb[i] * li_[i] - ji_[i])
         qi_.append(si_[i] * (tu[i] + tgoi1) - 0.5 * ve[i] * tb[i] ** 2)
-        pi_.append(qi_[i] * (tu[i] + tgoi1) - 0.5 * ve[i] * tb[i] ** 2 * (tb[i] / 3 + tgoi1))
+        pi_.append(qi_[i] * (tu[i] + tgoi1) - 0.5 * ve[i]
+                   * tb[i] ** 2 * (tb[i] / 3 + tgoi1))
 
         ji_[i] += li_[i] * tgoi1
         si_[i] += l_ * tb[i]
